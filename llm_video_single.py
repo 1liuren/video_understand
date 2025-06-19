@@ -11,11 +11,64 @@ from pydantic import BaseModel
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from tqdm import tqdm
 from dashscope import MultiModalConversation
+import time
+import cv2
 
 # 配置logger级别（可通过环境变量LOG_LEVEL设置）
 LOG_LEVEL = os.getenv('LOG_LEVEL', 'ERROR').upper()
 logger.remove()  # 移除默认的logger
 logger.add(lambda msg: print(msg, end=""), level=LOG_LEVEL)
+
+def get_video_info(video_path):
+    """
+    获取视频的基本信息：时长、大小、分辨率等
+    
+    Args:
+        video_path: 视频文件路径
+        
+    Returns:
+        dict: 包含视频信息的字典
+    """
+    try:
+        # 获取文件大小（字节）
+        file_size = os.path.getsize(video_path)
+        file_size_mb = round(file_size / (1024 * 1024), 2)  # 转换为MB
+        
+        # 使用OpenCV获取视频信息
+        cap = cv2.VideoCapture(str(video_path))
+        
+        if not cap.isOpened():
+            logger.error(f"无法打开视频文件: {video_path}")
+            return None
+            
+        # 获取视频属性
+        fps = cap.get(cv2.CAP_PROP_FPS)  # 帧率
+        frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)  # 总帧数
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))  # 宽度
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))  # 高度
+        
+        # 计算时长（秒）
+        duration_seconds = frame_count / fps if fps > 0 else 0
+        duration_minutes = duration_seconds / 60
+        
+        cap.release()
+        
+        video_info = {
+            "file_size_bytes": file_size,
+            "file_size_mb": file_size_mb,
+            "duration_seconds": round(duration_seconds, 2),
+            "fps": round(fps, 2),
+            "frame_count": int(frame_count),
+            "resolution": f"{width}x{height}",
+            "width": width,
+            "height": height
+        }
+        
+        return video_info
+        
+    except Exception as e:
+        logger.error(f"获取视频信息时出错: {str(e)}")
+        return None
 
 def call_openai(prompt, img_file, qa_type):
     reasoning_content = ""  # 定义完整思考过程
@@ -205,11 +258,11 @@ def call_openai(prompt, img_file, qa_type):
         if "Input data may contain inappropriate content" in error_message:
             logger.warning(f"视频内容审核未通过，文件路径: {img_file}")
             logger.debug(f"错误堆栈:\n{stack_trace}")
-            return None, None
+            return error_message, None
         else:
             logger.error(f"调用API失败: {error_message}，文件路径: {img_file}")
             logger.error(f"错误堆栈:\n{stack_trace}")
-            return None, None
+            return error_message, None
 
 def process_single_video_qa(video_file: str, qa_types: list = None) -> dict:
     """
@@ -222,6 +275,9 @@ def process_single_video_qa(video_file: str, qa_types: list = None) -> dict:
     Returns:
         dict: 包含所有问答对的结果字典
     """
+    # 记录开始时间
+    start_time = time.time()
+    
     # 如果没有提供qa_types，使用默认列表
     abs_video_path = video_file.absolute()
     # abs_video_path = video_file
@@ -238,6 +294,9 @@ def process_single_video_qa(video_file: str, qa_types: list = None) -> dict:
             "qa_conterfactual",
             "qa_scene"
         ]
+    
+    # 获取视频信息
+    video_info = get_video_info(abs_video_path)
     
     # 构建提示语
     prompt = """要求如下：
@@ -258,6 +317,12 @@ def process_single_video_qa(video_file: str, qa_types: list = None) -> dict:
     results = {
         "video_path": str(video_file),
         "annotaion": {}
+    }
+    
+    # 保存视频信息和处理信息用于统计（不包含在主结果中）
+    results["_video_info"] = video_info
+    results["_processing_info"] = {
+        "start_timestamp": start_time
     }
     
     # 处理每种类型的问答
@@ -283,6 +348,15 @@ def process_single_video_qa(video_file: str, qa_types: list = None) -> dict:
                 except Exception as e:
                     logger.error(f"处理 {qa_type} 问答对时出错: {str(e)}")
                 pbar.update(1)
+    
+    # 记录结束时间和计算处理时长
+    end_time = time.time()
+    processing_duration = end_time - start_time
+    
+    results["_processing_info"].update({
+        "end_timestamp": end_time,
+        "duration_seconds": round(processing_duration, 2)
+    })
     
     return results
 
