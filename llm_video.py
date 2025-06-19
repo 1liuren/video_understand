@@ -1,0 +1,76 @@
+import os
+import hashlib
+import json
+from openai import OpenAI
+from pathlib import Path
+from dotenv import load_dotenv
+from loguru import logger
+import base64
+from pydantic import BaseModel
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from tqdm import tqdm
+from dashscope import MultiModalConversation
+from llm_video_single import process_single_video_qa
+
+def process_video_folder(folder_path: str, max_workers: int = 4) -> list:
+    """批量处理视频文件夹"""
+    # 转换为Path对象并获取绝对路径
+    # folder = Path(folder_path).absolute()
+    folder = Path(folder_path)
+    if not folder.exists():
+        raise ValueError(f"文件夹不存在: {folder}")
+    
+    # 获取所有视频文件
+    video_files = []
+    for ext in ['.mp4', '.avi', '.mov', '.mkv']:
+        video_files.extend(folder.glob(f'**/*{ext}'))
+    
+    if not video_files:
+        raise ValueError(f"文件夹中没有找到视频文件: {folder}")
+    
+    results = []
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # 创建future到文件名的映射
+        future_to_file = {
+            executor.submit(process_single_video_qa, video_file): video_file
+            for video_file in video_files
+        }
+        
+        # 使用tqdm显示进度
+        with tqdm(total=len(video_files), desc="处理视频") as pbar:
+            for future in as_completed(future_to_file):
+                video_file = future_to_file[future]
+                try:
+                    result = future.result()
+                    logger.info(f"处理视频 {video_file.name} 成功！结果为: {result}")
+                    results.append(result)
+                except Exception as e:
+                    logger.error(f"处理视频 {video_file.name} 时出错: {str(e)}")
+                pbar.update(1)
+    
+    return results
+
+if __name__ == "__main__":
+    load_dotenv()
+    
+    # 配置logger级别（可通过环境变量LOG_LEVEL设置）
+    LOG_LEVEL = os.getenv('LOG_LEVEL', 'ERROR').upper()
+    logger.remove()  # 移除默认的logger
+    logger.add(lambda msg: print(msg, end=""), level=LOG_LEVEL)
+    
+    # 设置输入文件夹路径（相对路径）
+    input_folder = "videos_cut_3"
+    
+    try:
+        # 处理视频文件夹
+        results = process_video_folder(input_folder, max_workers=4)
+        
+        # 保存结果到文件
+        output_file = "result/qa_results_0619.json"
+        with open(output_file, "w", encoding="utf-8") as f:
+            json.dump(results, f, ensure_ascii=False, indent=2)
+        
+        print(f"\n所有问答对已生成完成，结果已保存到 {output_file}")
+        
+    except Exception as e:
+        logger.error(f"处理过程中出错: {str(e)}")
