@@ -19,6 +19,46 @@ LOG_LEVEL = os.getenv('LOG_LEVEL', 'ERROR').upper()
 logger.remove()  # 移除默认的logger
 logger.add(lambda msg: print(msg, end=""), level=LOG_LEVEL)
 
+def parse_json_simple(content: str, content_type: str = "unknown") -> dict:
+    """
+    简单解析JSON字符串
+    
+    Args:
+        content: 原始内容字符串
+        content_type: 内容类型（用于日志）
+        
+    Returns:
+        dict: 解析后的JSON对象，解析失败时返回None
+    """
+    if not content or not content.strip():
+        logger.error(f"{content_type}内容为空")
+        return None
+    
+    # 简单清理：移除首尾空白和markdown标记
+    cleaned_content = content.strip()
+    
+    if cleaned_content.startswith('```json'):
+        cleaned_content = cleaned_content[7:]
+    elif cleaned_content.startswith('```'):
+        cleaned_content = cleaned_content[3:]
+    
+    if cleaned_content.endswith('```'):
+        cleaned_content = cleaned_content[:-3]
+    
+    cleaned_content = cleaned_content.strip()
+    
+    # 直接解析JSON
+    try:
+        parsed_json = json.loads(cleaned_content)
+        logger.debug(f"{content_type}JSON解析成功")
+        return parsed_json
+    except json.JSONDecodeError as e:
+        logger.error(f"{content_type}JSON解析失败: {str(e)}")
+        return None
+    except Exception as e:
+        logger.error(f"{content_type}JSON解析时发生未知错误: {str(e)}")
+        return None
+
 def get_video_info(video_path):
     """
     获取视频的基本信息：时长、大小、分辨率等
@@ -92,9 +132,19 @@ def call_openai(prompt, img_file, qa_type):
         "qa_scene": "请分析视频中的场景细节，并生成一个问答对。问题应该关注场景的多模态特征。"
     }
     if qa_type == "caption":
-        current_prompt = qa_prompts.get(qa_type, "") + "\n" + f"""返回的结果使用json格式，并使用中文，格式如下，只需要整体caption：\n + {{
-            "caption":  
-            }}"""
+        current_prompt = qa_prompts.get(qa_type, "") + "\n" + f"""**输出要求：**
+必须严格按照以下JSON格式输出，不要添加任何其他内容：
+
+{{
+    "caption": "详细的视频描述内容"
+}}
+
+**注意：**
+- 输出必须是有效的JSON格式
+- 只包含一个caption字段
+- 所有内容使用中文
+- 字符串用双引号包围
+- 不要添加markdown标记或其他格式"""
     else:
         current_prompt = qa_prompts.get(qa_type, "") + "\n" + prompt
     
@@ -119,135 +169,77 @@ def call_openai(prompt, img_file, qa_type):
             result_format='message',
             response_format={'type': 'json_object'}
         )
-        # print("=" * 20 + "思考过程" + "=" * 20)
-        # for chunk in response:
-        #     # 如果思考过程与回复皆为空，则忽略
-        #     message = chunk.output.choices[0].message
-        #     reasoning_content_chunk = message.get("reasoning_content", None)
 
-        #     if (chunk.output.choices[0].message.content == [] and
-        #         reasoning_content_chunk == ""):
-        #         pass
-        #     else:
-        #         # 如果当前为思考过程
-        #         if reasoning_content_chunk != None and chunk.output.choices[0].message.content == []:
-        #             print(chunk.output.choices[0].message.reasoning_content, end="")
-        #             reasoning_content += chunk.output.choices[0].message.reasoning_content
-        #         # 如果当前为回复
-        #         elif chunk.output.choices[0].message.content != []:
-        #             if not is_answering:
-        #                 print("\n" + "=" * 20 + "完整回复" + "=" * 20)
-        #                 is_answering = True
-        #             print(chunk.output.choices[0].message.content[0]["text"], end="")
-        #             answer_content += chunk.output.choices[0].message.content[0]["text"]
-        # ... existing code ...
         clean_content = response["output"]["choices"][0]["message"].content[0]["text"]
-        # if clean_content.startswith('```json'):
-        #     clean_content = clean_content[7:]
-        # if clean_content.endswith('```'):
-        #     clean_content = clean_content[:-3]
         logger.info(f"模型输出: {clean_content}")
         
-        think_prompt = f"""
-        根据以下的问答对和视频内容，生成思考过程：
-        {clean_content}
-
-        请按以下格式生成分析内容：
-        1. 输出格式要求：使用JSON格式，结构为：
-        {{
-            "think": "在此填写完整的分析内容"
-        }}
-
-        2. 分析内容结构要求：
-        <规划>
-        分析视频的整体结构和关键点
-        </规划>
-
-        <字幕>
-        按时间段分析视频内容，格式如：
-        从00:00-00:02，视频展示了华为Mate 60和iPhone 15的渲染图，并将它们框定为一场竞争。
-        ...
-        </字幕>
-
-        <推理>
-        基于视频内容进行深入分析和推理
-        </推理>
-
-        <总结>
-        对整个视频内容进行全面总结
-        </总结>
-
-        注意：
-        1. 所有内容需要整合在一个完整的JSON字符串中
-        2. 时间段分析要准确且连贯
-        3. 确保所有XML标签配对完整
-        4. 分析要全面且有逻辑性
-        """
-        # f"""
-        # 根据以下的问答对和视频内容，生成思考过程
-        # {clean_content}
-        # 其中这个问答对同样是根据视频内容得出。请按时间段分析视频中各个部分的小主题，如
-        # ‘’‘从00:00-00:02，展示了华为Mate 60的渲染图，显示手机背部有一个圆形相机模块，位于上半部分中央。’‘’
-        # ...
-        # 在分析结束后总结，在think的输出中体现，think中需要以<规划><规划><字幕><字幕><推理><推理><总结><总结>的格式进行输出，在总结中需要对视频内容进行总结。输出结果以json格式输出，格式如下：{{
-        #     "think":
-        # }}
-        # 在<字幕><字幕>请按时间段分析视频中各个部分的小主题，如
-        # ‘’‘从0:01-0:05，视频展示了华为Mate 60和iPhone 15的渲染图，并将它们框定为一场竞争。’‘’
-        # ...
-        # """
-        response_thinking = MultiModalConversation.call(
-            api_key=os.getenv('DASHSCOPE_API_KEY'),
-            model="qwen-vl-max-latest",
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "video": video_path
-                        },
-                        {"text": think_prompt}
-                    ]
-                }
-            ],
-            # stream=True,
-            result_format='message',
-            response_format={'type': 'json_object'}
-        )
+        # 解析主要回答的JSON
+        answer = parse_json_simple(clean_content, "主要回答")
+        if not answer:
+            logger.error(f"主要回答JSON解析失败，返回错误信息")
+            return "JSON解析失败", None
         
-        reasoning_content_think = ""  # 定义完整思考过程
-        answer_content_think = ""     # 定义完整回复
-        
-        # print("=" * 20 + "think过程" + "=" * 20)
-        # for chunk in response_thinking:
-        #     # 如果思考过程与回复皆为空，则忽略
-        #     message = chunk.output.choices[0].message
-        #     reasoning_content_chunk = message.get("reasoning_content", None)
+        think_prompt = f"""请根据以下问答对和视频内容，生成详细的思考分析过程：
 
-        #     if (chunk.output.choices[0].message.content == [] and
-        #         reasoning_content_chunk == ""):
-        #         pass
-        #     else:
-        #         # 如果当前为思考过程
-        #         if reasoning_content_chunk != None and chunk.output.choices[0].message.content == []:
-        #             print(chunk.output.choices[0].message.reasoning_content, end="")
-        #             reasoning_content_think += chunk.output.choices[0].message.reasoning_content
-        #         # 如果当前为回复
-        #         elif chunk.output.choices[0].message.content != []:
-        #             if not is_answering:
-        #                 print("\n" + "=" * 20 + "think完整回复" + "=" * 20)
-        #                 is_answering = True
-        #             print(chunk.output.choices[0].message.content[0]["text"], end="")
-        #             answer_content_think += chunk.output.choices[0].message.content[0]["text"]
-        # print("=" * 20 + "think过程答案" + "=" * 20)
-        #... existing code...
-        clean_content_think = response_thinking["output"]["choices"][0]["message"].content[0]["text"]
-        logger.info(f"think过程答案: {clean_content_think}")
-        think_json = json.loads(clean_content_think)
-        thinking_content = think_json.get("think", "")
+问答对内容：
+{clean_content}
+
+**输出要求：**
+必须严格按照以下JSON格式输出，不要添加任何其他内容：
+
+{{
+    "think": "完整的分析过程，包括规划、字幕分析、推理和总结"
+}}
+
+**分析内容应包含：**
+1. <规划>视频整体结构和关键点分析</规划>
+2. <字幕>按时间段分析视频内容，如：从00:00-00:02，视频展示了...</字幕>
+3. <推理>基于视频内容的深入分析推理</推理>  
+4. <总结>对视频内容的全面总结</总结>
+
+**注意：**
+- 输出必须是有效的JSON格式
+- 所有分析内容放在think字段的字符串中
+- 使用中文描述
+- 时间段分析要准确连贯
+- 字符串用双引号包围
+- 不要添加markdown标记"""
         
-        answer = json.loads(clean_content)
-        return answer, thinking_content
+        try:
+            response_thinking = MultiModalConversation.call(
+                api_key=os.getenv('DASHSCOPE_API_KEY'),
+                model="qwen-vl-max-latest",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "video": video_path
+                            },
+                            {"text": think_prompt}
+                        ]
+                    }
+                ],
+                result_format='message',
+                response_format={'type': 'json_object'}
+            )
+            
+            clean_content_think = response_thinking["output"]["choices"][0]["message"].content[0]["text"]
+            logger.info(f"think过程答案: {clean_content_think}")
+            
+            # 解析思考过程的JSON
+            think_json = parse_json_simple(clean_content_think, "思考过程")
+            if think_json and "think" in think_json:
+                thinking_content = think_json.get("think", "")
+            else:
+                logger.warning("思考过程JSON解析失败，使用空字符串")
+                thinking_content = ""
+            
+            return answer, thinking_content
+            
+        except Exception as think_error:
+            logger.warning(f"生成思考过程时出错: {str(think_error)}，将返回主要回答和空思考过程")
+            return answer, ""
 
     
     except Exception as e:
@@ -299,19 +291,30 @@ def process_single_video_qa(video_file: str, qa_types: list = None) -> dict:
     video_info = get_video_info(abs_video_path)
     
     # 构建提示语
-    prompt = """要求如下：
-            1. 问题设计要求：
-            - 需要整合视觉和听觉信息来回答，请深度思考视频中的内容，请按时间段分析视频中各个部分的小主题,并在分析结束后总结
-            - 需要适当的结合字幕和音频来总结信息
-            - 提供4个选项（A/B/C/D），每个选项都要合理且有区分度
-            - 答案应该需要深入分析视频内容才能得出
-            2. 输出格式：
-            {
-                "question": "基于视频中的具体事件和证据，[具体问题]？\\nA. [选项A]\\nB. [选项B]\\nC. [选项C]\\nD. [选项D]",
-                "answer": "[简短答案]",
-                "gt": "[正确选项字母]"
-            }
-            注意确保问题和选项的措辞清晰、准确、无歧义，question字段中需要包含具体的问题以及选项，answer字段中只需要提供选项中的答案即可，不需要多余的解释，gt字段中只需要提供正确选项的字母。"""
+    prompt = """请根据视频内容生成问答对。
+
+**要求：**
+1. 深度分析视频的视觉和听觉信息
+2. 结合字幕和音频内容
+3. 提供4个选项（A/B/C/D），每个选项都要合理且有区分度
+4. 答案需要深入分析视频内容才能得出
+
+**输出要求：**
+必须严格按照以下JSON格式输出，不要添加任何其他内容：
+
+{
+    "question": "基于视频中的具体事件和证据，[问题内容]？\\nA. [选项A]\\nB. [选项B]\\nC. [选项C]\\nD. [选项D]",
+    "answer": "[选项答案]",
+    "gt": "[A/B/C/D]"
+}
+
+**注意：**
+- 输出必须是有效的JSON格式
+- question字段包含完整问题和所有选项
+- answer字段只包含选项内容，不要解释
+- gt字段只包含一个字母（A、B、C或D）
+- 不要使用换行符，使用\\n表示换行
+- 所有字符串都要用双引号包围"""
     
     # 初始化结果字典
     results = {
