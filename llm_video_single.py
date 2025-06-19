@@ -161,11 +161,11 @@ def call_openai(prompt, img_file, qa_type):
     ]
 
     try:
+        # 调用主要回答API
         response = MultiModalConversation.call(
             api_key=os.getenv('DASHSCOPE_API_KEY'),
             model="qwen-vl-max-latest",
             messages=messages,
-            # stream=True
             result_format='message',
             response_format={'type': 'json_object'}
         )
@@ -176,9 +176,10 @@ def call_openai(prompt, img_file, qa_type):
         # 解析主要回答的JSON
         answer = parse_json_simple(clean_content, "主要回答")
         if not answer:
-            logger.error(f"主要回答JSON解析失败，返回错误信息")
             return "JSON解析失败", None
         
+        # 生成思考过程（简化处理）
+        thinking_content = ""
         think_prompt = f"""请根据以下问答对和视频内容，生成详细的思考分析过程：
 
 问答对内容：
@@ -205,55 +206,35 @@ def call_openai(prompt, img_file, qa_type):
 - 字符串用双引号包围
 - 不要添加markdown标记"""
         
+        # 尝试生成思考过程，失败时使用空字符串
         try:
             response_thinking = MultiModalConversation.call(
                 api_key=os.getenv('DASHSCOPE_API_KEY'),
                 model="qwen-vl-max-latest",
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "video": video_path
-                            },
-                            {"text": think_prompt}
-                        ]
-                    }
-                ],
+                messages=[{
+                    "role": "user",
+                    "content": [{"video": video_path}, {"text": think_prompt}]
+                }],
                 result_format='message',
                 response_format={'type': 'json_object'}
             )
             
             clean_content_think = response_thinking["output"]["choices"][0]["message"].content[0]["text"]
-            logger.info(f"think过程答案: {clean_content_think}")
-            
-            # 解析思考过程的JSON
             think_json = parse_json_simple(clean_content_think, "思考过程")
             if think_json and "think" in think_json:
                 thinking_content = think_json.get("think", "")
-            else:
-                logger.warning("思考过程JSON解析失败，使用空字符串")
-                thinking_content = ""
-            
-            return answer, thinking_content
-            
-        except Exception as think_error:
-            logger.warning(f"生成思考过程时出错: {str(think_error)}，将返回主要回答和空思考过程")
-            return answer, ""
+        except:
+            logger.warning("思考过程生成失败，使用空字符串")
+        
+        return answer, thinking_content
 
-    
     except Exception as e:
         error_message = str(e)
-        import traceback
-        stack_trace = traceback.format_exc()
-        
         if "Input data may contain inappropriate content" in error_message:
             logger.warning(f"视频内容审核未通过，文件路径: {img_file}")
-            logger.debug(f"错误堆栈:\n{stack_trace}")
             return error_message, None
         else:
             logger.error(f"调用API失败: {error_message}，文件路径: {img_file}")
-            logger.error(f"错误堆栈:\n{stack_trace}")
             return error_message, None
 
 def process_single_video_qa(video_file: str, qa_types: list = None) -> dict:
@@ -340,16 +321,13 @@ def process_single_video_qa(video_file: str, qa_types: list = None) -> dict:
         with tqdm(total=len(qa_types), desc="生成问答对") as pbar:
             for future in as_completed(future_to_qa):
                 qa_type = future_to_qa[future]
-                try:
-                    result, thinking = future.result()
-                    if result:
-                        results["annotaion"][qa_type] = result
-                        results["annotaion"][qa_type]["thinking"] = thinking
-                        print(f"{video_file}：{qa_type} 生成成功！")
-                    else:
-                        print(f"{video_file}：{qa_type} 生成失败！")
-                except Exception as e:
-                    logger.error(f"处理 {qa_type} 问答对时出错: {str(e)}")
+                result, thinking = future.result()
+                if result and result != "JSON解析失败":
+                    results["annotaion"][qa_type] = result
+                    results["annotaion"][qa_type]["thinking"] = thinking
+                    print(f"{video_file}：{qa_type} 生成成功！")
+                else:
+                    print(f"{video_file}：{qa_type} 生成失败！")
                 pbar.update(1)
     
     # 记录结束时间和计算处理时长
@@ -376,9 +354,6 @@ if __name__ == "__main__":
     
     # 保存结果到文件
     output_file = "qa_results_test.json"
-    try:
-        with open(output_file, "w", encoding="utf-8") as f:
-            json.dump(results, f, ensure_ascii=False, indent=2)
-        print(f"\n所有问答对已生成完成，结果已保存到 {output_file}")
-    except Exception as e:
-        logger.error(f"保存结果文件时出错: {str(e)}")
+    with open(output_file, "w", encoding="utf-8") as f:
+        json.dump(results, f, ensure_ascii=False, indent=2)
+    print(f"\n所有问答对已生成完成，结果已保存到 {output_file}")
