@@ -42,7 +42,7 @@ def process_video_folder(folder_path: str, max_workers: int = 4) -> list:
             for future in as_completed(future_to_file):
                 video_file = future_to_file[future]
                 result = future.result()
-                if result:
+                if result and isinstance(result, dict) and "annotaion" in result:
                     logger.info(f"处理视频 {video_file.name} 成功！")
                     results.append(result)
                 else:
@@ -60,7 +60,7 @@ if __name__ == "__main__":
     logger.add(lambda msg: print(msg, end=""), level=LOG_LEVEL)
     
     # 设置输入文件夹路径（相对路径）
-    input_folder = "videos_cut_3"
+    input_folder = "gemini 预标注"
     
     # 确保result目录存在
     result_dir = Path("result")

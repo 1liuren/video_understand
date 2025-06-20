@@ -322,12 +322,13 @@ def process_single_video_qa(video_file: str, qa_types: list = None) -> dict:
             for future in as_completed(future_to_qa):
                 qa_type = future_to_qa[future]
                 result, thinking = future.result()
-                if result and result != "JSON解析失败":
+                # 检查result是否为有效的字典结果
+                if result and isinstance(result, dict):
                     results["annotaion"][qa_type] = result
                     results["annotaion"][qa_type]["thinking"] = thinking
                     print(f"{video_file}：{qa_type} 生成成功！")
                 else:
-                    print(f"{video_file}：{qa_type} 生成失败！")
+                    print(f"{video_file}：{qa_type} 生成失败！原因: {result}")
                 pbar.update(1)
     
     # 记录结束时间和计算处理时长
