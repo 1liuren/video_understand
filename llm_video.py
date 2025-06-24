@@ -55,7 +55,7 @@ if __name__ == "__main__":
     load_dotenv()
     
     # 配置logger级别（可通过环境变量LOG_LEVEL设置）
-    LOG_LEVEL = os.getenv('LOG_LEVEL', 'ERROR').upper()
+    LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO').upper()
     logger.remove()  # 移除默认的logger
     
     # 创建log目录（如果不存在）
@@ -81,7 +81,7 @@ if __name__ == "__main__":
     total_start_time = time.time()
     
     # 处理视频文件夹
-    results = process_video_folder(input_folder, max_workers=1)
+    results = process_video_folder(input_folder, max_workers=4)
     
     # 记录整体结束时间
     total_end_time = time.time()

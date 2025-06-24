@@ -1,0 +1,24 @@
+{
+    "api_config": {
+        "api_key": "YOUR_DASHSCOPE_API_KEY_HERE",
+        "base_url": "https://dashscope.aliyuncs.com/api/v1",
+        "timeout": 60
+    },
+    "model_config": {
+        "model_name": "qwen-vl-max",
+        "temperature": 0.1,
+        "top_p": 0.2,
+        "frequency_penalty": 0.2,
+        "presence_penalty": 0.1
+    },
+    "prompt_config": {
+        "system_prompt": "你是一个专业的视频内容分析助手。请根据提供的视频内容，生成准确的问答对。",
+        "max_retry": 3,
+        "retry_delay": 1
+    },
+    "output_config": {
+        "output_dir": "result",
+        "log_level": "INFO",
+        "save_intermediate": false
+    }
+} 

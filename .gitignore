@@ -226,7 +226,6 @@ final_video.*
 videoplayback.*
 
 # 配置文件（可能包含敏感信息）
-config.json
 settings.json
 
 # 备份文件

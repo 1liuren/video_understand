@@ -14,14 +14,82 @@ from dashscope import MultiModalConversation
 import time
 import cv2
 
-# 配置logger级别（可通过环境变量LOG_LEVEL设置）
-LOG_LEVEL = os.getenv('LOG_LEVEL', 'ERROR').upper()
+def load_config(config_path: str = "config.json") -> dict:
+    """
+    加载配置文件
+    
+    Args:
+        config_path: 配置文件路径
+        
+    Returns:
+        dict: 配置信息
+    """
+    try:
+        if not os.path.exists(config_path):
+            logger.warning(f"配置文件 {config_path} 不存在，使用默认配置")
+            return get_default_config()
+        
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+        
+        # 验证配置完整性
+        required_sections = ['api_config', 'model_config', 'prompt_config', 'output_config']
+        for section in required_sections:
+            if section not in config:
+                logger.warning(f"配置文件缺少 {section} 部分，使用默认值")
+                config[section] = get_default_config()[section]
+        
+        logger.info(f"成功加载配置文件: {config_path}")
+        return config
+        
+    except Exception as e:
+        logger.error(f"加载配置文件失败: {e}，使用默认配置")
+        return get_default_config()
+
+def get_default_config() -> dict:
+    """
+    获取默认配置
+    
+    Returns:
+        dict: 默认配置信息
+    """
+    return {
+        "api_config": {
+            "api_key": os.getenv('DASHSCOPE_API_KEY', 'YOUR_DASHSCOPE_API_KEY_HERE'),
+            "base_url": os.getenv('DASHSCOPE_BASE_URL', 'https://dashscope.aliyuncs.com/api/v1'),
+            "timeout": 60
+        },
+        "model_config": {
+            "model_name": "qwen-vl-max",
+            "temperature": 0.1,
+            "max_tokens": 1000,
+            "top_p": 0.9,
+            "frequency_penalty": 0,
+            "presence_penalty": 0
+        },
+        "prompt_config": {
+            "system_prompt": "你是一个专业的视频内容分析助手。请根据提供的视频内容，生成准确的问答对。",
+            "max_retry": 3,
+            "retry_delay": 1
+        },
+        "output_config": {
+            "output_dir": "result",
+            "log_level": "INFO",
+            "save_intermediate": False
+        }
+    }
+
+# 加载全局配置
+CONFIG = load_config()
+
+# 配置logger级别（优先使用配置文件，然后是环境变量）
+LOG_LEVEL = CONFIG['output_config'].get('log_level', os.getenv('LOG_LEVEL', 'ERROR')).upper()
 logger.remove()  # 移除默认的logger
 logger.add(lambda msg: print(msg, end=""), level=LOG_LEVEL)
 
 def parse_json_simple(content: str, content_type: str = "unknown") -> dict:
     """
-    简单解析JSON字符串，带基本修复功能
+    简化的JSON解析函数，包含两层修复机制
     
     Args:
         content: 原始内容字符串
@@ -34,110 +102,61 @@ def parse_json_simple(content: str, content_type: str = "unknown") -> dict:
         logger.error(f"{content_type}内容为空")
         return None
     
-    # 简单清理：移除首尾空白和markdown标记
+    # 清理markdown标记
     cleaned_content = content.strip()
-    
     if cleaned_content.startswith('```json'):
         cleaned_content = cleaned_content[7:]
     elif cleaned_content.startswith('```'):
         cleaned_content = cleaned_content[3:]
-    
     if cleaned_content.endswith('```'):
         cleaned_content = cleaned_content[:-3]
-    
     cleaned_content = cleaned_content.strip()
     
-    # 直接解析JSON
+    # 第一次尝试：直接解析
     try:
-        parsed_json = json.loads(cleaned_content)
-        logger.debug(f"{content_type}JSON解析成功")
-        return parsed_json
+        return json.loads(cleaned_content)
     except json.JSONDecodeError as e:
         logger.warning(f"{content_type}JSON直接解析失败: {str(e)}，尝试修复")
-        
-        # 尝试修复常见的JSON问题
-        fixed_content = fix_json_quotes(cleaned_content)
-        try:
-            parsed_json = json.loads(fixed_content)
-            logger.info(f"{content_type}JSON修复后解析成功")
-            return parsed_json
-        except json.JSONDecodeError as e2:
-            logger.error(f"{content_type}JSON修复后仍解析失败: {str(e2)}")
-            return None
-    except Exception as e:
-        logger.error(f"{content_type}JSON解析时发生未知错误: {str(e)}")
+    
+    
+    try:
+        fixed_content2 = fix_missing_quotes(cleaned_content)
+        result = json.loads(fixed_content2)
+        logger.info(f"{content_type}JSON修复后解析成功")
+        return result
+    except json.JSONDecodeError as e:
+        logger.error(f"{content_type}JSON所有修复尝试失败: {str(e)}")
         return None
 
-def fix_json_quotes(content: str) -> str:
+
+def fix_missing_quotes(content: str) -> str:
     """
-    修复JSON中的引号问题
+    修复JSON中缺少引号、引号多余，以及换行符未转义的问题
     """
     import re
-    
-    # 修复策略：针对包含选择题选项的行进行特殊处理
-    lines = content.split('\n')
-    fixed_lines = []
-    
-    for line in lines:
-        # 检查是否是包含选项的行（包含 A. B. C. D.）
-        if '"question":' in line and ('A. "' in line or 'B. "' in line or 'C. "' in line or 'D. "' in line):
-            # 对这种行进行特殊处理：将选项内的引号转义
-            # 找到字段值的开始和结束
-            start_quote = line.find(': "') + 3
-            # 找到最后一个引号（字段值的结束）
-            end_quote = line.rfind('"')
-            
-            if start_quote < end_quote:
-                field_value = line[start_quote:end_quote]
-                # 转义内部的引号
-                fixed_value = field_value.replace('"', '\\"')
-                fixed_line = line[:start_quote] + fixed_value + line[end_quote:]
-                fixed_lines.append(fixed_line)
-            else:
-                fixed_lines.append(line)
-        elif '"answer":' in line and ('"A. "' in line or '"B. "' in line or '"C. "' in line or '"D. "' in line):
-            # 同样处理answer字段中的引号问题
-            start_quote = line.find(': "') + 3
-            end_quote = line.rfind('"')
-            
-            if start_quote < end_quote:
-                field_value = line[start_quote:end_quote]
-                # 转义内部的引号，但保留首尾
-                if field_value.startswith('"') and field_value.endswith('"'):
-                    # 如果已经有引号包围，只转义内部的
-                    inner_value = field_value[1:-1]
-                    fixed_inner = inner_value.replace('"', '\\"')
-                    fixed_value = f'"{fixed_inner}"'
-                else:
-                    fixed_value = field_value.replace('"', '\\"')
-                fixed_line = line[:start_quote] + fixed_value + line[end_quote:]
-                fixed_lines.append(fixed_line)
-            else:
-                fixed_lines.append(line)
-        else:
-            # 对于其他行，进行通用的引号转义处理
-            # 查找字段值中的未转义引号
-            if '": "' in line and line.count('"') > 4:
-                # 这表明可能有内部引号需要转义
-                # 找到字段值部分
-                colon_quote_pos = line.find('": "')
-                if colon_quote_pos != -1:
-                    start_pos = colon_quote_pos + 4
-                    end_pos = line.rfind('"')
-                    if start_pos < end_pos:
-                        field_value = line[start_pos:end_pos]
-                        # 转义内部引号
-                        fixed_value = field_value.replace('"', '\\"')
-                        fixed_line = line[:start_pos] + fixed_value + line[end_pos:]
-                        fixed_lines.append(fixed_line)
-                    else:
-                        fixed_lines.append(line)
-                else:
-                    fixed_lines.append(line)
-            else:
-                fixed_lines.append(line)
-    
-    return '\n'.join(fixed_lines)
+
+    fixed = content
+
+    # 1. 转义换行符，只对 "question": "..." 的值做处理
+    def escape_newlines_in_question(match):
+        key = match.group(1)
+        value = match.group(2)
+        # 替换换行符为 \n，同时移除前后空格
+        escaped_value = value.replace('\n', '\\n').strip()
+        return f'"{key}": "{escaped_value}"'
+
+    fixed = re.sub(r'"(question)":\s*"((?:[^"\\]|\\.)*)"', escape_newlines_in_question, fixed, flags=re.DOTALL)
+
+    # 2. 修复 "answer": 后面缺少引号的情况
+    fixed = re.sub(r'"answer":\s*([^"\s][^,}\n]*)([,}])', r'"answer": "\1"\2', fixed)
+
+    # 3. 修复多余引号的情况（如多个双引号）
+    fixed = re.sub(r'"answer":\s*"([^"]*?)"+([,}])', r'"answer": "\1"\2', fixed)
+
+    # 4. 修复 "gt" 字段缺少引号
+    fixed = re.sub(r'"gt":\s*([ABCD])([,}])', r'"gt": "\1"\2', fixed)
+
+    return fixed
 
 def get_video_info(video_path):
     """
@@ -198,6 +217,9 @@ def call_openai(prompt, img_file, qa_type):
     video_path = f"file://{img_file}"
     print(video_path)
     
+    # 从配置获取系统提示词（如果需要的话）
+    prompt_config = CONFIG['prompt_config']
+    
     # 根据qa_type构建不同的提示语
     qa_prompts = {
         "caption": "请详尽分析并描述视频内容，需要包含以下方面：\n1. 整体概述：视频的主要内容和核心信息\n2. 视觉元素：场景、人物、物体、动作、色彩等\n3. 听觉元素：语音、音乐、音效、环境声等\n4. 文本内容：字幕、标题、显示的文字等\n5. 叙事结构：情节发展、转折点、高潮等\n6. 时空背景：拍摄时间、地点、环境等\n7. 主题分析：核心主题、寓意、情感表达等\n8. 因果关系：事件之间的逻辑联系\n9. 技术特点：拍摄手法、剪辑风格等\n请确保描述准确、全面且结构清晰。",
@@ -241,17 +263,23 @@ def call_openai(prompt, img_file, qa_type):
     ]
 
     try:
+        # 从配置获取API参数
+        api_config = CONFIG['api_config']
+        model_config = CONFIG['model_config']
+        
         # 调用主要回答API
         response = MultiModalConversation.call(
             api_key=os.getenv('DASHSCOPE_API_KEY'),
-            model="qwen-vl-max-latest",
+            model=model_config.get('model_name', "qwen-vl-max"),
             messages=messages,
+            temperature=model_config.get('temperature', 0.1),
+            top_p=model_config.get('top_p', 0.2),
             result_format='message',
             response_format={'type': 'json_object'}
         )
-
-        clean_content = response["output"]["choices"][0]["message"].content[0]["text"]
-        logger.info(f"模型输出: {clean_content}")
+        logger.info(f"response: {response}")
+        clean_content = response.output.choices[0].message.content[0]["text"]
+        logger.info(f"模型{qa_type}输出: {clean_content}")
         
         # 解析主要回答的JSON
         answer = parse_json_simple(clean_content, "主要回答")
@@ -290,22 +318,24 @@ def call_openai(prompt, img_file, qa_type):
         try:
             response_thinking = MultiModalConversation.call(
                 api_key=os.getenv('DASHSCOPE_API_KEY'),
-                model="qwen-vl-max-latest",
+                model=model_config.get('model_name', "qwen-vl-max"),
                 messages=[{
                     "role": "user",
                     "content": [{"video": video_path}, {"text": think_prompt}]
                 }],
+                temperature=model_config.get('temperature', 0.1),
+                top_p=model_config.get('top_p', 0.2),
                 result_format='message',
                 response_format={'type': 'json_object'}
             )
-            
-            clean_content_think = response_thinking["output"]["choices"][0]["message"].content[0]["text"]
-            logger.info(f"思考过程: {clean_content_think}")
+            logger.info(f"response_thinking: {response_thinking}")
+            clean_content_think = response_thinking.output.choices[0].message.content[0]["text"]  
+            logger.info(f"模型{qa_type}思考过程: {clean_content_think}")
             think_json = parse_json_simple(clean_content_think, "思考过程")
             if think_json and "think" in think_json:
                 thinking_content = think_json.get("think", "")
-        except:
-            logger.warning("思考过程生成失败，使用空字符串")
+        except Exception as e:
+            logger.warning(f"思考过程生成失败，使用空字符串，错误原因: {str(e)}")
         
         return answer, thinking_content
 
@@ -315,6 +345,7 @@ def call_openai(prompt, img_file, qa_type):
             logger.warning(f"视频内容审核未通过，文件路径: {img_file}")
             return error_message, None
         else:
+            # logger.exception会自动记录当前异常的堆栈跟踪信息，不需要手动获取
             logger.error(f"调用API失败: {error_message}，文件路径: {img_file}")
             return error_message, None
 
@@ -365,18 +396,32 @@ def process_single_video_qa(video_file: str, qa_types: list = None) -> dict:
 必须严格按照以下JSON格式输出，不要添加任何其他内容：
 
 {
-    "question": "基于视频中的具体事件和证据，[问题内容]？\\nA. [选项A]\\nB. [选项B]\\nC. [选项C]\\nD. [选项D]",
-    "answer": "[选项答案]",
+    "question": "基于视频中的具体事件和证据，[问题内容]？\\nA. [选项A内容]\\nB. [选项B内容]\\nC. [选项C内容]\\nD. [选项D内容]",
+    "answer": "[选项答案内容]",
     "gt": "[A/B/C/D]"
 }
 
-**注意：**
-- 输出必须是有效的JSON格式
-- question字段包含完整问题和所有选项
-- answer字段只包含选项内容，不要解释
-- gt字段只包含一个字母（A、B、C或D）
-- 不要使用换行符，使用\\n表示换行
-- 所有字符串都要用双引号包围"""
+**JSON格式严格要求：**
+- 输出必须是完全标准的JSON格式，能被json.loads()直接解析
+- 所有字符串值必须用双引号包围，包括answer字段的值
+- 选项内容中绝对不要使用双引号(")或单引号(')
+- 选项格式严格为: A. 选项内容（不要在选项内容外加引号）
+- answer字段的值必须用双引号包围，只包含选项的具体内容，不包含A./B./C./D.前缀
+- gt字段的值必须用双引号包围，只包含一个字母（A、B、C或D）
+- 使用\\n表示换行，不要使用实际换行符
+- 所有字段名和字符串值都必须用双引号包围
+
+**完全正确的示例格式：**
+{
+    "question": "基于视频内容，最能描述场景的是？\\nA. 宁静的自然环境\\nB. 繁华的城市街道\\nC. 现代化的办公空间\\nD. 热闹的购物中心",
+    "answer": "宁静的自然环境",
+    "gt": "A"
+}
+
+**错误示例（绝对不要这样）：**
+- "answer": 宁静的自然环境 （错误：缺少双引号）
+- "gt": A （错误：缺少双引号）
+- "A. "选项内容"" （错误：选项内容有引号）"""
     
     # 初始化结果字典
     results = {
