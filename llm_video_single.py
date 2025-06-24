@@ -21,7 +21,7 @@ logger.add(lambda msg: print(msg, end=""), level=LOG_LEVEL)
 
 def parse_json_simple(content: str, content_type: str = "unknown") -> dict:
     """
-    简单解析JSON字符串
+    简单解析JSON字符串，带基本修复功能
     
     Args:
         content: 原始内容字符串
@@ -53,11 +53,91 @@ def parse_json_simple(content: str, content_type: str = "unknown") -> dict:
         logger.debug(f"{content_type}JSON解析成功")
         return parsed_json
     except json.JSONDecodeError as e:
-        logger.error(f"{content_type}JSON解析失败: {str(e)}")
-        return None
+        logger.warning(f"{content_type}JSON直接解析失败: {str(e)}，尝试修复")
+        
+        # 尝试修复常见的JSON问题
+        fixed_content = fix_json_quotes(cleaned_content)
+        try:
+            parsed_json = json.loads(fixed_content)
+            logger.info(f"{content_type}JSON修复后解析成功")
+            return parsed_json
+        except json.JSONDecodeError as e2:
+            logger.error(f"{content_type}JSON修复后仍解析失败: {str(e2)}")
+            return None
     except Exception as e:
         logger.error(f"{content_type}JSON解析时发生未知错误: {str(e)}")
         return None
+
+def fix_json_quotes(content: str) -> str:
+    """
+    修复JSON中的引号问题
+    """
+    import re
+    
+    # 修复策略：针对包含选择题选项的行进行特殊处理
+    lines = content.split('\n')
+    fixed_lines = []
+    
+    for line in lines:
+        # 检查是否是包含选项的行（包含 A. B. C. D.）
+        if '"question":' in line and ('A. "' in line or 'B. "' in line or 'C. "' in line or 'D. "' in line):
+            # 对这种行进行特殊处理：将选项内的引号转义
+            # 找到字段值的开始和结束
+            start_quote = line.find(': "') + 3
+            # 找到最后一个引号（字段值的结束）
+            end_quote = line.rfind('"')
+            
+            if start_quote < end_quote:
+                field_value = line[start_quote:end_quote]
+                # 转义内部的引号
+                fixed_value = field_value.replace('"', '\\"')
+                fixed_line = line[:start_quote] + fixed_value + line[end_quote:]
+                fixed_lines.append(fixed_line)
+            else:
+                fixed_lines.append(line)
+        elif '"answer":' in line and ('"A. "' in line or '"B. "' in line or '"C. "' in line or '"D. "' in line):
+            # 同样处理answer字段中的引号问题
+            start_quote = line.find(': "') + 3
+            end_quote = line.rfind('"')
+            
+            if start_quote < end_quote:
+                field_value = line[start_quote:end_quote]
+                # 转义内部的引号，但保留首尾
+                if field_value.startswith('"') and field_value.endswith('"'):
+                    # 如果已经有引号包围，只转义内部的
+                    inner_value = field_value[1:-1]
+                    fixed_inner = inner_value.replace('"', '\\"')
+                    fixed_value = f'"{fixed_inner}"'
+                else:
+                    fixed_value = field_value.replace('"', '\\"')
+                fixed_line = line[:start_quote] + fixed_value + line[end_quote:]
+                fixed_lines.append(fixed_line)
+            else:
+                fixed_lines.append(line)
+        else:
+            # 对于其他行，进行通用的引号转义处理
+            # 查找字段值中的未转义引号
+            if '": "' in line and line.count('"') > 4:
+                # 这表明可能有内部引号需要转义
+                # 找到字段值部分
+                colon_quote_pos = line.find('": "')
+                if colon_quote_pos != -1:
+                    start_pos = colon_quote_pos + 4
+                    end_pos = line.rfind('"')
+                    if start_pos < end_pos:
+                        field_value = line[start_pos:end_pos]
+                        # 转义内部引号
+                        fixed_value = field_value.replace('"', '\\"')
+                        fixed_line = line[:start_pos] + fixed_value + line[end_pos:]
+                        fixed_lines.append(fixed_line)
+                    else:
+                        fixed_lines.append(line)
+                else:
+                    fixed_lines.append(line)
+            else:
+                fixed_lines.append(line)
+    
+    return '\n'.join(fixed_lines)
 
 def get_video_info(video_path):
     """
