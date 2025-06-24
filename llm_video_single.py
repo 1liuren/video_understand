@@ -220,6 +220,7 @@ def call_openai(prompt, img_file, qa_type):
             )
             
             clean_content_think = response_thinking["output"]["choices"][0]["message"].content[0]["text"]
+            logger.info(f"思考过程: {clean_content_think}")
             think_json = parse_json_simple(clean_content_think, "思考过程")
             if think_json and "think" in think_json:
                 thinking_content = think_json.get("think", "")

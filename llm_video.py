@@ -57,10 +57,21 @@ if __name__ == "__main__":
     # 配置logger级别（可通过环境变量LOG_LEVEL设置）
     LOG_LEVEL = os.getenv('LOG_LEVEL', 'ERROR').upper()
     logger.remove()  # 移除默认的logger
+    
+    # 创建log目录（如果不存在）
+    log_dir = Path("log")
+    log_dir.mkdir(exist_ok=True)
+    
+    # 设置日志文件路径
+    log_file = log_dir / f"video_processing_{time.strftime('%Y%m%d_%H%M%S')}.log"
+    
+    # 添加控制台输出
     logger.add(lambda msg: print(msg, end=""), level=LOG_LEVEL)
+    # 添加文件输出
+    logger.add(log_file, rotation="100 MB", level=LOG_LEVEL)
     
     # 设置输入文件夹路径（相对路径）
-    input_folder = "gemini 预标注"
+    input_folder = "videos_cut_3"
     
     # 确保result目录存在
     result_dir = Path("result")
@@ -70,7 +81,7 @@ if __name__ == "__main__":
     total_start_time = time.time()
     
     # 处理视频文件夹
-    results = process_video_folder(input_folder, max_workers=4)
+    results = process_video_folder(input_folder, max_workers=1)
     
     # 记录整体结束时间
     total_end_time = time.time()
@@ -86,7 +97,7 @@ if __name__ == "__main__":
             }
             clean_results.append(clean_result)
     
-    output_file = "result/qa_results_0619.json"
+    output_file = "result/qa_results_0624.json"
     with open(output_file, "w", encoding="utf-8") as f:
         json.dump(clean_results, f, ensure_ascii=False, indent=2)
     
@@ -140,7 +151,7 @@ if __name__ == "__main__":
     }
     
     # 保存统计信息到单独的文件
-    stats_file = "result/processing_statistics_0619.json"
+    stats_file = "result/processing_statistics_0624.json"
     with open(stats_file, "w", encoding="utf-8") as f:
         json.dump(stats, f, ensure_ascii=False, indent=2)
     
